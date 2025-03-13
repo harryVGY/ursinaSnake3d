@@ -1,9 +1,19 @@
-def random_position(grid_size):
-    from random import randint
-    return (randint(0, grid_size[0] - 1), randint(0, grid_size[1] - 1))
+def random_position(bounds):
+    from random import uniform
+    x = uniform(-bounds, bounds)
+    y = uniform(-bounds, bounds)
+    return (x, y)
 
-def check_collision(rect1, rect2):
-    return (rect1.x < rect2.x + rect2.width and
-            rect1.x + rect1.width > rect2.x and
-            rect1.y < rect2.y + rect2.height and
-            rect1.y + rect1.height > rect2.y)
+def check_collision(entity1, entity2):
+    return entity1.intersects(entity2).hit
+
+def load_texture(texture_path):
+    from ursina import load_texture
+    return load_texture(texture_path)
+
+def clamp(value, min_value, max_value):
+    return max(min(value, max_value), min_value)
+
+def distance_between(point1, point2):
+    from math import sqrt
+    return sqrt((point1.x - point2.x) ** 2 + (point1.y - point2.y) ** 2)

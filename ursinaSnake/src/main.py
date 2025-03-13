@@ -1,15 +1,16 @@
 from ursina import *
+from game import Game
+from camera import setup_camera
 
-def update():
-    # This function will be called every frame to update the game state
-    pass
-
+# Initialize the Ursina engine
 app = Ursina()
 
-# Initialize the game window
-app.window.title = 'Ursina Snake'
-app.window.borderless = False
-app.window.size = (800, 600)
+# Create the game instance
+game = Game()
+game.setup()
 
-# Start the game loop
+# Set up camera after player is created
+camera_controller = setup_camera(game.player)
+
+# Run the game
 app.run()
