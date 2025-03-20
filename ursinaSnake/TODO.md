@@ -1,4 +1,4 @@
-add real models and textures, folder in downloads.
+add real models and textures, folder in downloads
 fix colliders to "houses"
 enemies
 powerups
