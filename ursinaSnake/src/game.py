@@ -3,7 +3,7 @@ from player import Player
 from enemy import Enemy
 from environment import Environment
 from random import randint
-from camera import setup_camera  # Add this import
+# Remove any camera imports here to avoid circular imports
 
 class Game(Entity):
     def __init__(self):
@@ -37,9 +37,21 @@ class Game(Entity):
 
     def check_collisions(self):
         for enemy in self.enemies:
-            if self.player.intersects(enemy).hit:
-                self.game_over = True
-                print("Game Over! Your score:", self.score)
+            # Fix collision detection using more robust method
+            hit_info = self.player.intersects(enemy)
+            if hit_info.hit:
+                print(f"Hit detected! Distance: {hit_info.distance}")
+                # Increase score
+                self.score += 1
+                print(f"Score: {self.score}")
+                # Remove the enemy
+                enemy.disable()
+                self.enemies.remove(enemy)
+                # Grow the snake
+                self.player.grow()
+                # Spawn a new enemy
+                new_enemy = Enemy(position=(random.uniform(-15, 15), 1, random.uniform(-15, 15)))
+                self.enemies.append(new_enemy)
 
     def restart(self):
         self.game_over = False
@@ -48,8 +60,13 @@ class Game(Entity):
 
 # Create an instance of the Game class and run the game
 if __name__ == "__main__":
-    app = Ursina()
+    app = Ursina(icon="../assets/models/snake.ico", title="snakeX3000")
     game = Game()
     game.setup()
-    setup_camera()  # Call this to set up the camera
+
+    # Import camera module only when running as main script
+    # to avoid circular imports
+    from camera import setup_camera
+    camera_controller = setup_camera(game.player)
+
     app.run()

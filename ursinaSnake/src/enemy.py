@@ -5,13 +5,15 @@ class Enemy(Entity):
     def __init__(self, position=(0, 0, 0), model='cube', texture='white_cube', scale=1):
         super().__init__()
         self.model = model
-        self.texture = texture
+        self.texture = 'brick'  # Better texture
         self.color = color.red
         self.scale = scale
-        self.position = position
-        self.speed = random.uniform(1, 3)  # Random speed for enemy movement
+        # Ensure all enemies are at the same height as player for collisions
+        self.position = Vec3(position[0], 1, position[2])
+        self.speed = random.uniform(1, 3)
         self.direction = Vec3(random.choice([-1, 1]), 0, random.choice([-1, 1])).normalized()
-        self.collider = 'box'  # Add collider
+        # Make sure collider is properly set
+        self.collider = 'box'
 
     def update(self):
         self.position += self.direction * self.speed * time.dt
