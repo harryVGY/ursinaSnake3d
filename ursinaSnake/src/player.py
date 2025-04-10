@@ -4,16 +4,18 @@ class Player(Entity):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.model = 'cube'
-        self.texture = 'brick'  # Better texture
+        self.texture = 'brick'
         self.color = color.green
         self.scale = (1, 1, 1)
-        self.position = (0, 1, 0)  # Start slightly above ground
-        self.speed = 5
+        self.position = (0, 1, 0)
+        self.speed = 8  # Increased from 5 for faster movement
         self.growth_rate = 0.1
         self.length = 1
         self.segments = []
         self.collider = 'box'
-        self.mouse_sensitivity = 40  # Mouse sensitivity
+        self.mouse_sensitivity = 100  # Significantly increased for better responsiveness
+        
+        print("Player initialized - press WASD to move, mouse to look, 1/2 to switch views")
 
     def update(self):
         self.handle_movement()
@@ -21,10 +23,10 @@ class Player(Entity):
         self.check_collisions()
 
     def handle_movement(self):
-        # Mouse look control
+        # Simple, direct mouse look with high sensitivity
         self.rotation_y += mouse.velocity[0] * self.mouse_sensitivity * time.dt
         
-        # WASD movement relative to facing direction
+        # Movement without complex collision detection for now
         move_direction = Vec3(0, 0, 0)
         
         if held_keys['w']:
@@ -36,12 +38,26 @@ class Player(Entity):
         if held_keys['d']:
             move_direction += self.right
             
-        # Normalize to prevent diagonal movement being faster
+        # Normalize and apply movement
         if move_direction.length() > 0:
             move_direction = move_direction.normalized()
             
-        # Apply movement
-        self.position += move_direction * self.speed * time.dt
+            # Calculate the new position
+            new_position = self.position + move_direction * self.speed * time.dt
+            
+            # Check for collisions before moving
+            hit_info = raycast(
+                origin=self.position + Vec3(0, 0.5, 0),  # Cast from slightly above current position
+                direction=move_direction,
+                distance=1.0,  # Check a bit ahead of the player
+                ignore=[self] + self.segments
+            )
+            
+            if hit_info.hit:
+                # Print collision information for debugging
+                print(f"Collision detected with: {hit_info.entity.name if hasattr(hit_info.entity, 'name') else 'unknown'}")
+            else:
+                self.position = new_position
         
         # Keep player at a constant height
         self.y = 1

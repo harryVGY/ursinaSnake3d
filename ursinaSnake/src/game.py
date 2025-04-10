@@ -1,9 +1,13 @@
 from ursina import *
-from player import Player
-from enemy import Enemy
-from environment import Environment
-from random import randint
-# Remove any camera imports here to avoid circular imports
+import random  # Make sure random is imported
+
+try:
+    from player import Player
+    from enemy import Enemy
+    from environment import Environment
+except ImportError as e:
+    print(f"Import error in game.py: {e}")
+    raise
 
 class Game(Entity):
     def __init__(self):
@@ -15,9 +19,15 @@ class Game(Entity):
         self.collider = 'box'  # Add this in __init__ method
 
     def setup(self):
-        self.player = Player()
-        self.spawn_enemies()
-        self.setup_environment()
+        try:
+            self.player = Player()
+            self.spawn_enemies()
+            self.setup_environment()
+        except Exception as e:
+            print(f"Error during game setup: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def spawn_enemies(self):
         for _ in range(5):  # Spawn 5 enemies for example
@@ -36,37 +46,47 @@ class Game(Entity):
             self.check_collisions()
 
     def check_collisions(self):
-        for enemy in self.enemies:
-            # Fix collision detection using more robust method
-            hit_info = self.player.intersects(enemy)
-            if hit_info.hit:
-                print(f"Hit detected! Distance: {hit_info.distance}")
-                # Increase score
-                self.score += 1
-                print(f"Score: {self.score}")
-                # Remove the enemy
-                enemy.disable()
-                self.enemies.remove(enemy)
-                # Grow the snake
-                self.player.grow()
-                # Spawn a new enemy
-                new_enemy = Enemy(position=(random.uniform(-15, 15), 1, random.uniform(-15, 15)))
-                self.enemies.append(new_enemy)
+        # Use a copy of the list to avoid modification during iteration
+        for enemy in list(self.enemies):
+            if not enemy or not self.player:
+                continue
+                
+            try:
+                # Fix collision detection using more robust method
+                hit_info = self.player.intersects(enemy)
+                if hit_info.hit:
+                    print(f"Hit detected! Distance: {hit_info.distance}")
+                    # Increase score
+                    self.score += 1
+                    print(f"Score: {self.score}")
+                    # Remove the enemy
+                    enemy.disable()
+                    self.enemies.remove(enemy)
+                    # Grow the snake
+                    self.player.grow()
+                    # Spawn a new enemy
+                    new_enemy = Enemy(position=(random.uniform(-15, 15), 1, random.uniform(-15, 15)))
+                    self.enemies.append(new_enemy)
+            except Exception as e:
+                print(f"Error in collision detection: {e}")
 
     def restart(self):
         self.game_over = False
         self.score = 0
         self.setup()
 
-# Create an instance of the Game class and run the game
+# Only run this if game.py is run directly
 if __name__ == "__main__":
-    app = Ursina(icon="../assets/models/snake.ico", title="snakeX3000")
-    game = Game()
-    game.setup()
-
-    # Import camera module only when running as main script
-    # to avoid circular imports
-    from camera import setup_camera
-    camera_controller = setup_camera(game.player)
-
-    app.run()
+    try:
+        from camera import setup_camera
+        
+        app = Ursina(title="snakeX3000")
+        game = Game()
+        game.setup()
+        
+        camera_controller = setup_camera(game.player)
+        app.run()
+    except Exception as e:
+        print(f"Error starting game from game.py: {e}")
+        import traceback
+        traceback.print_exc()

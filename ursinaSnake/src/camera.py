@@ -6,72 +6,62 @@ class CameraController(Entity):
         super().__init__()
         self.camera_mode = 'first_person'
         self.distance = 10
-        self.rotation_speed = 5
         self.target = target
-        self.smoothing = 8  # Add smoothing factor
-        self.target_position = Vec3(0,0,0)
         
         # Lock mouse cursor
         mouse.locked = True
         mouse.visible = False
+        
+        # Set initial camera position and rotation
+        if self.target:
+            camera.position = self.target.position + Vec3(0, 1.7, 0)
+            camera.rotation = self.target.rotation
 
     def update(self):
         if not self.target:
             return
-
-        # Toggle camera modes
-        if held_keys['1']:
+            
+        # Toggle camera modes with number keys
+        if held_keys['1'] and self.camera_mode != 'third_person':
             self.camera_mode = 'third_person'
-        elif held_keys['2']:
+            print("Switched to third-person view")
+            
+        if held_keys['2'] and self.camera_mode != 'first_person':
             self.camera_mode = 'first_person'
+            print("Switched to first-person view")
 
-        # Smoothly update target position to reduce flickering
-        self.target_position = lerp(
-            self.target_position, 
-            self.target.position, 
-            time.dt * self.smoothing
-        )
-
-        if self.camera_mode == 'third_person':
-            # Fixed third-person camera - calculate position behind player
-            # Use player's forward direction instead of rotation_y
-            angle_in_radians = math.radians(self.target.rotation_y)
-            offset_x = -math.sin(angle_in_radians) * self.distance
-            offset_z = -math.cos(angle_in_radians) * self.distance
-            
-            target_camera_pos = Vec3(
-                self.target_position.x + offset_x,
-                self.target_position.y + 3,  # Camera height
-                self.target_position.z + offset_z
-            )
-            
-            # Apply smoothing to camera position
-            camera.position = lerp(
-                camera.position, 
-                target_camera_pos, 
-                time.dt * self.smoothing
-            )
-            
-            # Look at player position plus a small offset in their look direction
-            # This makes the camera look slightly ahead of the player
-            forward_offset = self.target.forward * 2
-            look_at_pos = Vec3(
-                self.target_position.x + forward_offset.x,
-                self.target_position.y + 1,  # Look at head level
-                self.target_position.z + forward_offset.z
-            )
-            
-            camera.look_at(look_at_pos)
-        
-        elif self.camera_mode == 'first_person':
-            # Keep first-person view the same
+        # First-person view (camera attached to player)
+        if self.camera_mode == 'first_person':
             camera.position = Vec3(
-                self.target.x, 
-                self.target.y + 1.5, 
+                self.target.x,
+                self.target.y + 1.7,
                 self.target.z
             )
             camera.rotation = self.target.rotation
+            
+        # Third-person view (camera follows behind player)
+        elif self.camera_mode == 'third_person':
+            # Fix the rotation issue by directly using player's rotation angle
+            # Calculate exact position behind player based on rotation angle
+            angle_in_radians = math.radians(self.target.rotation_y)
+            
+            # Position camera directly behind player based on their rotation
+            camera_x = self.target.x - math.sin(angle_in_radians) * self.distance
+            camera_z = self.target.z - math.cos(angle_in_radians) * self.distance
+            
+            # Set camera position with height above player
+            camera.position = Vec3(camera_x, self.target.y + 5, camera_z)
+            
+            # Set camera rotation to match player's rotation for alignment
+            # This ensures we're looking in the same direction
+            target_rotation = Vec3(
+                30,  # Looking down at a 30-degree angle 
+                self.target.rotation_y,  # Match player's horizontal rotation
+                0  # No roll
+            )
+            
+            # Apply the rotation directly
+            camera.rotation = target_rotation
 
 def setup_camera(target=None):
-    camera_controller = CameraController(target)
-    return camera_controller
+    return CameraController(target)

@@ -1,0 +1,2 @@
+building_H.obj
+building_H.mtl
