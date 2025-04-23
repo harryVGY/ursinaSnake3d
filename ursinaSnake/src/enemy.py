@@ -1,4 +1,4 @@
-from ursina import Entity, color, Vec3, time  # Added time import
+from ursina import Entity, color, Vec3, time, distance  # Added distance import
 import random
 
 class Enemy(Entity):
@@ -18,15 +18,26 @@ class Enemy(Entity):
     def update(self):
         self.position += self.direction * self.speed * time.dt
         
-        # Change direction if hitting a wall (simple boundary check)
-        if abs(self.x) > 10 or abs(self.z) > 10:
-            self.direction = -self.direction  # Reverse direction
+        # Change direction if hitting a wall (use larger boundaries)
+        boundary = 24  # Match closer to ground plane size
+        if abs(self.x) > boundary or abs(self.z) > boundary:
+            # Reverse direction and move slightly away from boundary
+            self.position -= self.direction * self.speed * time.dt * 2  # Move back slightly
+            self.direction = -self.direction
+            # Optional: Add slight random change to direction to prevent getting stuck
+            self.direction.x += random.uniform(-0.1, 0.1)
+            self.direction.z += random.uniform(-0.1, 0.1)
+            self.direction = self.direction.normalized()
 
     @classmethod
-    def spawn(cls, count):
+    def spawn(cls, count, player_pos=None):
         enemies = []
         for _ in range(count):
-            position = (random.uniform(-10, 10), 0, random.uniform(-10, 10))
+            # Ensure enemies spawn away from the player
+            while True:
+                position = (random.uniform(-20, 20), 1, random.uniform(-20, 20))
+                if player_pos is None or distance(Vec3(*position), player_pos) > 5:
+                    break
             enemy = cls(position=position)
             enemies.append(enemy)
         return enemies

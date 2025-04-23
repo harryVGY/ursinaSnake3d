@@ -7,6 +7,7 @@ class CameraController(Entity):
         self.camera_mode = 'first_person'
         self.distance = 10
         self.target = target
+        self.sensitivity = 2.0  # Default mouse sensitivity
         
         # Lock mouse cursor
         mouse.locked = True
@@ -17,10 +18,22 @@ class CameraController(Entity):
             camera.position = self.target.position + Vec3(0, 1.7, 0)
             camera.rotation = self.target.rotation
 
+    def input(self, key):
+        # Increase/decrease mouse sensitivity with +/- keys
+        if key == '+':
+            self.sensitivity *= 1.2
+            print(f"Mouse sensitivity increased: {self.sensitivity}")
+        elif key == '-':
+            self.sensitivity /= 1.2
+            print(f"Mouse sensitivity decreased: {self.sensitivity}")
+
     def update(self):
         if not self.target:
             return
             
+        # Mouse sensitivity
+        mouse_sensitivity = self.sensitivity
+        
         # Toggle camera modes with number keys
         if held_keys['1'] and self.camera_mode != 'third_person':
             self.camera_mode = 'third_person'
@@ -32,6 +45,11 @@ class CameraController(Entity):
 
         # First-person view (camera attached to player)
         if self.camera_mode == 'first_person':
+            # Mouse look
+            camera.rotation_y += mouse.velocity[0] * mouse_sensitivity * 40
+            camera.rotation_x -= mouse.velocity[1] * mouse_sensitivity * 40
+            camera.rotation_x = clamp(camera.rotation_x, -90, 90)
+            
             camera.position = Vec3(
                 self.target.x,
                 self.target.y + 1.7,
