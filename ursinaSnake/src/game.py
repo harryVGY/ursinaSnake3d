@@ -7,6 +7,7 @@ try:
     from environment import Environment
     from powerup import PowerUp
     from ui import UI  # Import the UI class
+    from camera import setup_camera
 except ImportError as e:
     print(f"Import error in game.py: {e}")
     raise
@@ -58,6 +59,8 @@ class Game(Entity):
         self.setup_environment()
         self.spawn_enemies()
         self.spawn_powerup()
+        # Initialize camera after player is created
+        self.camera_controller = setup_camera(self.player)
         self.started = True
 
     def spawn_enemies(self):

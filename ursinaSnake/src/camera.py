@@ -21,13 +21,22 @@ class CameraController(Entity):
 
     def _update_position(self, initial=False):
         from ursina import camera, Vec3, lerp, time
-        # calculate ideal position
-        angle = radians(self.target.rotation_y)
-        ideal = Vec3(
-            self.target.x - sin(angle)*self.distance,
-            self.target.y + self.height,
-            self.target.z - cos(angle)*self.distance
-        )
+        # calculate ideal position based on game mode
+        if hasattr(self.target, 'crazy_mode') and not self.target.crazy_mode:
+            # normal mode: fixed behind along world -Z axis
+            ideal = Vec3(
+                self.target.x,
+                self.target.y + self.height,
+                self.target.z - self.distance
+            )
+        else:
+            # crazy mode or no mode flag: rotate around snake orientation
+            angle = radians(self.target.rotation_y)
+            ideal = Vec3(
+                self.target.x - sin(angle)*self.distance,
+                self.target.y + self.height,
+                self.target.z - cos(angle)*self.distance
+            )
         if initial:
             camera.position = ideal
         else:
