@@ -63,8 +63,11 @@ def main():
         game.setup()
         
         # Set up camera after player is created
-        camera_controller = setup_camera(game.player)
-        
+        try:
+            camera_controller = setup_camera(game.player)
+        except Exception as e:
+            print(f"Camera init error: {e}")
+
         # Run the game
         app.run()
     except Exception as e:

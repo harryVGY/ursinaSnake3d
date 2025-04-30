@@ -1,67 +1,39 @@
 from ursina import *
 import math
+from math import radians, sin, cos
 
 class CameraController(Entity):
     def __init__(self, target=None):
         super().__init__()
-        self.camera_mode = 'first_person'
-        self.distance = 10
         self.target = target
-        
-        # Lock mouse cursor
-        mouse.locked = True
-        mouse.visible = False
-        
-        # Set initial camera position and rotation
+        self.distance = 15    # behind distance
+        self.height = 10      # above target
+        self.smoothing = 8    # smooth follow speed
+        # initialize camera position
         if self.target:
-            camera.position = self.target.position + Vec3(0, 1.7, 0)
-            camera.rotation = self.target.rotation
+            self._update_position(initial=True)
 
     def update(self):
         if not self.target:
             return
-            
-        # Toggle camera modes with number keys
-        if held_keys['1'] and self.camera_mode != 'third_person':
-            self.camera_mode = 'third_person'
-            print("Switched to third-person view")
-            
-        if held_keys['2'] and self.camera_mode != 'first_person':
-            self.camera_mode = 'first_person'
-            print("Switched to first-person view")
+        # always third-person follow
+        self._update_position()
 
-        # First-person view (camera attached to player)
-        if self.camera_mode == 'first_person':
-            camera.position = Vec3(
-                self.target.x,
-                self.target.y + 1.7,
-                self.target.z
-            )
-            camera.rotation = self.target.rotation
-            
-        # Third-person view (camera follows behind player)
-        elif self.camera_mode == 'third_person':
-            # Fix the rotation issue by directly using player's rotation angle
-            # Calculate exact position behind player based on rotation angle
-            angle_in_radians = math.radians(self.target.rotation_y)
-            
-            # Position camera directly behind player based on their rotation
-            camera_x = self.target.x - math.sin(angle_in_radians) * self.distance
-            camera_z = self.target.z - math.cos(angle_in_radians) * self.distance
-            
-            # Set camera position with height above player
-            camera.position = Vec3(camera_x, self.target.y + 5, camera_z)
-            
-            # Set camera rotation to match player's rotation for alignment
-            # This ensures we're looking in the same direction
-            target_rotation = Vec3(
-                30,  # Looking down at a 30-degree angle 
-                self.target.rotation_y,  # Match player's horizontal rotation
-                0  # No roll
-            )
-            
-            # Apply the rotation directly
-            camera.rotation = target_rotation
+    def _update_position(self, initial=False):
+        from ursina import camera, Vec3, lerp, time
+        # calculate ideal position
+        angle = radians(self.target.rotation_y)
+        ideal = Vec3(
+            self.target.x - sin(angle)*self.distance,
+            self.target.y + self.height,
+            self.target.z - cos(angle)*self.distance
+        )
+        if initial:
+            camera.position = ideal
+        else:
+            camera.position = lerp(camera.position, ideal, time.dt * self.smoothing)
+        camera.look_at(self.target.position + Vec3(0,2,0))
+
 
 def setup_camera(target=None):
     return CameraController(target)
