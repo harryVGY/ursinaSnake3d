@@ -24,9 +24,6 @@ class Environment(Entity):
         self.dynamic_elements = []  # Initialize dynamic_elements list before using it
         self.building_models, self.building_texture = self.load_building_assets() # Load models and texture
         self.create_city_layout()
-        # Lower buildings by 50% (shift vertically, not scale)
-        for building in self.buildings:
-            building.y *= 0.5
         self.create_obstacles()
         self.create_dynamic_elements()
 

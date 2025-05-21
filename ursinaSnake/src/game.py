@@ -61,6 +61,8 @@ class Game(Entity):
         self.spawn_powerup()
         # Initialize camera after player is created
         self.camera_controller = setup_camera(self.player)
+        # Set default camera view to third-person
+        self.set_camera_view('third')
         self.started = True
 
     def spawn_enemies(self):
@@ -77,7 +79,14 @@ class Game(Entity):
             return
 
         if not self.game_over:
+            # Update player and enemies
             self.player.update()
+            # Clamp player within city bounds
+            x = min(max(self.player.position.x, -20), 20)
+            z = min(max(self.player.position.z, -20), 20)
+            if x != self.player.position.x or z != self.player.position.z:
+                self.player.position = Vec3(x, self.player.position.y, z)
+
             for enemy in self.enemies:
                 enemy.update()
             self.check_collisions()
@@ -200,21 +209,13 @@ class Game(Entity):
         if key == 'r' and self.game_over:
             self.restart()
         
-        # Toggle first/third person view with keys 1/2
+        # Toggle camera view with keys 1/2
         elif key == '1':
-            # First-person view
-            if self.player:
-                camera.position = self.player.position + Vec3(0, 1, 0)
-                camera.parent = self.player
-                camera.rotation = (0, 0, 0)
-                print("First-person view activated")
+            self.set_camera_view('first')
+            print("First-person view activated")
         elif key == '2':
-            # Third-person view
-            if self.player:
-                camera.parent = scene
-                camera.position = self.player.position + Vec3(0, 10, -10)
-                camera.look_at(self.player, 'forward')
-                print("Third-person view activated")
+            self.set_camera_view('third')
+            print("Third-person view activated")
     
     def restart(self):
         """Restart the game when R is pressed after game over"""
@@ -237,6 +238,9 @@ class Game(Entity):
         self.game_over = False
         self.score = 0
         self.powerup_spawn_timer = 0
+        # Immediately reset UI score
+        if self.ui:
+            self.ui.set_score(self.score)
         
         # Clear game over text
         for entity in scene.entities:
@@ -255,15 +259,29 @@ class Game(Entity):
         self.spawn_enemies()
         self.spawn_powerup()  # Initial power-up
 
+    def set_camera_view(self, view):
+        """Switch camera between first and third person views"""
+        if not self.player:
+            return
+        if view == 'first':
+            camera.parent = self.player
+            camera.position = Vec3(0, 1, 0)
+            camera.rotation = (0, 0, 0)
+        else:
+            # Parent to player so camera follows with an offset behind and above
+            camera.parent = self.player
+            camera.position = Vec3(0, 10, -20)  # moved further back
+            camera.rotation = (20, 0, 0)  # Tilt downward to look at the player
+
 # Only run this if game.py is run directly
 if __name__ == "__main__":
     try:
         from camera import setup_camera
-        
+
         app = Ursina(title="snakeX3000")
         game = Game()
         game.setup()
-        
+
         camera_controller = setup_camera(game.player)
         app.run()
     except Exception as e:
