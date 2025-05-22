@@ -16,36 +16,6 @@ except ImportError as e:
     print("Make sure you're running the game from the correct directory")
     sys.exit(1)
 
-# Temporarily comment out WebExporter to focus on getting the game running
-"""
-try:
-    from panda3d.web import WebExporter
-    
-    # Define paths
-    output_dir = os.path.join(parent_dir, "web_build")
-    
-    # Initialize exporter
-    exporter = WebExporter()
-    
-    # Add your Ursina game files
-    exporter.add_python_file(os.path.join(current_dir, "main.py"))
-    exporter.add_python_file(os.path.join(current_dir, "game.py"))
-    exporter.add_python_file(os.path.join(current_dir, "camera.py"))
-    exporter.add_python_file(os.path.join(current_dir, "player.py"))
-    exporter.add_python_file(os.path.join(current_dir, "enemy.py"))
-    exporter.add_python_file(os.path.join(current_dir, "environment.py"))
-    
-    # Add assets directory
-    asset_dir = os.path.join(parent_dir, "assets")
-    if os.path.exists(asset_dir):
-        exporter.add_directory(asset_dir, "assets")
-    
-    # Export the game
-    exporter.export(output_dir)
-    print(f"Game exported to {output_dir}")
-except ImportError:
-    print("WebExporter not available - skipping web export")
-"""
 
 def main():
     try:

@@ -13,7 +13,7 @@ class UI(Entity):
         self.score_text = Text(text=f'Score: {self.score}', position=(-0.85, 0.45), scale=2, color=color.white)
 
         # Health display text - moved higher up on the screen
-        self.health_text = Text(text=f'Health: {self.health}', position=(-0.85, 0.4), scale=2, color=color.white)
+        self.health_text = Text(text=f'Health: {self.health}', position=(-0.85, 0.3), scale=2, color=color.white)
         
         # Create health bar - moved lower to avoid overlapping with text
         self.health_bar_bg = Entity(

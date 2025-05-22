@@ -1,5 +1,5 @@
 from ursina import *
-import random  # Make sure random is imported
+import random
 
 try:
     from player import Player
