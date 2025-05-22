@@ -1,5 +1,158 @@
 from ursina import *
 from collections import deque
+import math
+import random
+import time as py_time
+
+class Bullet(Entity):
+    def __init__(self, position, direction, **kwargs):
+        super().__init__(
+            model='sphere',
+            color=color.yellow,
+            scale=0.3,
+            position=position,
+            collider='sphere',
+            **kwargs
+        )
+        self.direction = direction
+        self.speed = 30  # Fast bullet speed
+        self.max_lifetime = 2.0  # Seconds before bullet despawns
+        self.lifetime = 0
+        self.damage = 1
+        self.hit_enemies = []  # Track hit enemies to avoid multiple hits
+        
+        # Add trail effect
+        self.trail = Entity(
+            parent=self,
+            model='quad',
+            color=color.orange,
+            scale=(0.1, 0.5),
+            billboard=True
+        )
+        
+        # Add glow effect
+        self.glow = Entity(
+            parent=self,
+            model='sphere',
+            color=color.rgba(1, 0.8, 0, 0.3),
+            scale=1.5
+        )
+        
+    def update(self):
+        # Update position based on direction and speed
+        self.position += self.direction * self.speed * time.dt
+        
+        # Update lifetime and destroy if expired
+        self.lifetime += time.dt
+        if self.lifetime >= self.max_lifetime:
+            self.disable()
+            destroy(self, delay=0.1)
+            return
+            
+        # Check collision with enemies
+        self.check_enemy_collisions()
+        
+        # Check collision with buildings
+        hit_info = raycast(
+            origin=self.position,
+            direction=self.direction,
+            distance=0.5,
+            ignore=[self]
+        )
+        
+        if hit_info.hit:
+            # Create impact effect
+            self.create_impact_effect(hit_info.point, hit_info.normal)
+            # Destroy bullet on impact
+            self.disable()
+            destroy(self, delay=0.1)
+    
+    def check_enemy_collisions(self):
+        """Check for collisions with enemies"""
+        # Find all enemies
+        for entity in scene.entities:
+            if hasattr(entity, 'enemy_type') and entity not in self.hit_enemies:
+                # Simple distance-based collision
+                distance = (entity.position - self.position).length()
+                if distance < 1.2:  # Slightly bigger than combined scale
+                    self.hit_enemy(entity)
+                    self.hit_enemies.append(entity)
+                    
+                    # Don't destroy the bullet yet if it's piercing
+                    if len(self.hit_enemies) >= 3:  # Max 3 enemies per bullet
+                        self.disable()
+                        destroy(self, delay=0.1)
+                        break
+    
+    def hit_enemy(self, enemy):
+        """Handle enemy hit by bullet"""
+        # Create hit effect
+        self.create_impact_effect(enemy.position, Vec3(0, 1, 0))
+        
+        # Find game instance
+        game_instance = None
+        for entity in scene.entities:
+            if hasattr(entity, 'ui') and hasattr(entity, 'player'):
+                game_instance = entity
+                break
+        
+        if game_instance:
+            # Remove enemy
+            if enemy in game_instance.enemies:
+                # Add score based on enemy type
+                score_value = enemy.points * 2  # Double points for shooting
+                game_instance.score += score_value
+                
+                # Update UI
+                if game_instance.ui:
+                    game_instance.ui.set_score(game_instance.score)
+                
+                # Disable and remove enemy
+                enemy.disable()
+                game_instance.enemies.remove(enemy)
+                
+                # Spawn replacement enemy
+                if enemy.enemy_type == 'seeker':
+                    if random.random() < 0.3:  # Reduced chance for seeker replacement
+                        game_instance.spawn_enemies(1, force_seeker=True)
+                else:
+                    game_instance.spawn_enemies(1)
+    
+    def create_impact_effect(self, position, normal):
+        """Create visual impact effect"""
+        # Create impact particles
+        for _ in range(8):
+            # Create particle spreading from impact point
+            particle = Entity(
+                model='sphere',
+                color=color.yellow,
+                position=position,
+                scale=0.2
+            )
+            
+            # Random direction in hemisphere facing the normal
+            random_dir = Vec3(
+                random.uniform(-1, 1),
+                random.uniform(-1, 1),
+                random.uniform(-1, 1)
+            ).normalized()
+            
+            # Make sure it's in the hemisphere of the normal
+            if random_dir.dot(normal) < 0:
+                random_dir = -random_dir
+                
+            # Animate particle movement
+            particle.animate_position(
+                position + random_dir * random.uniform(1, 2),
+                duration=0.3
+            )
+            
+            # Fade out and shrink
+            particle.animate_color(color.rgba(1, 0.8, 0, 0), duration=0.3)
+            particle.animate_scale(0, duration=0.3)
+            
+            # Clean up
+            destroy(particle, delay=0.3)
 
 class Player(Entity):
     def __init__(self, **kwargs):
@@ -71,6 +224,87 @@ class Player(Entity):
             self.crazy_mode = not self.crazy_mode
             print(f"Crazy mode {'ON' if self.crazy_mode else 'OFF'}")
             return
+        
+        # Shoot gun with left click
+        if key == 'left mouse down' or key == 'left mouse down':
+            print("Shooting attempt detected")
+            self.shoot_gun()
+
+    def shoot_gun(self):
+        """Shoot a bullet in the direction you're aiming with the mouse"""
+        print("Shooting gun")
+        # Get the mouse position in 3D space
+        mouse_world_position = mouse.world_point
+        
+        # Fallback if mouse.world_point is None
+        if mouse_world_position is None:
+            # Shoot in the direction the player is facing
+            shoot_direction = self.forward
+            print("Using fallback shooting direction (forward)")
+        else:
+            # Calculate shooting direction - from player head toward mouse position
+            shoot_direction = (mouse_world_position - self.position).normalized()
+            print(f"Shooting at mouse position: {mouse_world_position}")
+        
+        # Ensure the direction is level (not shooting up/down too much)
+        shoot_direction.y = min(max(shoot_direction.y, -0.3), 0.3)  # Limit vertical angle
+        shoot_direction = shoot_direction.normalized()  # Re-normalize
+        
+        # Create bullet slightly in front of player to avoid self-collision
+        bullet_pos = self.position + shoot_direction * 1.5 + Vec3(0, 0.5, 0)
+        
+        # Create the bullet
+        bullet = Bullet(position=bullet_pos, direction=shoot_direction)
+        
+        # Add muzzle flash effect
+        self.create_muzzle_flash(bullet_pos, shoot_direction)
+        
+        # Add recoil effect - slight push back
+        self.position -= shoot_direction * 0.3
+
+    def create_muzzle_flash(self, position, direction):
+        """Create a muzzle flash effect when firing"""
+        # Create flash
+        flash = Entity(
+            model='sphere',
+            color=color.yellow,
+            position=position,
+            scale=0.5
+        )
+        
+        # Quick expanding and fading animation
+        flash.animate_scale(2, duration=0.1)
+        flash.animate_color(color.clear, duration=0.1)
+        
+        # Clean up
+        destroy(flash, delay=0.1)
+        
+        # Add some smoke particles
+        for _ in range(5):
+            smoke = Entity(
+                model='sphere',
+                color=color.rgba(0.7, 0.7, 0.7, 0.5),
+                position=position,
+                scale=0.3
+            )
+            
+            # Random direction slightly forward
+            random_dir = direction + Vec3(
+                random.uniform(-0.3, 0.3),
+                random.uniform(-0.3, 0.3),
+                random.uniform(-0.3, 0.3)
+            )
+            
+            # Animate
+            smoke.animate_position(
+                position + random_dir * random.uniform(1, 2),
+                duration=0.5
+            )
+            smoke.animate_scale(0, duration=0.5)
+            smoke.animate_color(color.rgba(0.7, 0.7, 0.7, 0), duration=0.5)
+            
+            # Clean up
+            destroy(smoke, delay=0.5)
 
     def handle_movement(self):
         # Crazy mode: turn on A/D; Normal: no turn
@@ -351,3 +585,68 @@ class Player(Entity):
         if self.combo_count > 0:
             print(f"Combo x{self.combo_count} expired")
             self.combo_count = 0
+
+    def take_damage_from_enemy(self, enemy):
+        """Handle taking damage from an enemy"""
+        # Only take damage if not in cooldown
+        if self.damage_cooldown <= 0:
+            # Apply damage
+            self.health -= 1
+            self.damage_cooldown = self.damage_cooldown_duration
+            
+            # Visual feedback - flash red
+            self.color = color.red
+            invoke(self.reset_color, delay=0.2)
+            
+            # Create damage effect
+            self.create_damage_effect(enemy.color)
+            
+            # Update UI if we can find the game instance
+            game_instance = None
+            for entity in scene.entities:
+                if hasattr(entity, 'ui') and hasattr(entity, 'player'):
+                    game_instance = entity
+                    break
+            
+            if game_instance and game_instance.ui:
+                game_instance.ui.set_health(self.health)
+            
+            # Apply knockback
+            knockback_direction = (self.position - enemy.position).normalized()
+            self.position += knockback_direction * 2  # Knock back 2 units
+            
+            print(f"Player took damage from {enemy.enemy_type} enemy! Health: {self.health}")
+            
+            # Play damage sound if available
+            if hasattr(self, 'damage_sound'):
+                self.damage_sound.play()
+
+    def create_damage_effect(self, color=color.red):
+        """Create particle effect when player takes damage"""
+        # Create damage particles
+        for _ in range(10):
+            particle = Entity(
+                model='sphere',
+                color=color,
+                position=self.position + Vec3(
+                    random.uniform(-1, 1),
+                    random.uniform(0, 1),
+                    random.uniform(-1, 1)
+                ),
+                scale=random.uniform(0.2, 0.5)
+            )
+            
+            # Animate the particles
+            particle.animate_scale(0, duration=0.5)
+            particle.animate_color(color.rgba(1, 0, 0, 0), duration=0.5)
+            particle.animate_position(
+                particle.position + Vec3(
+                    random.uniform(-2, 2),
+                    random.uniform(1, 3),
+                    random.uniform(-2, 2)
+                ),
+                duration=0.5
+            )
+            
+            # Clean up
+            destroy(particle, delay=0.5)

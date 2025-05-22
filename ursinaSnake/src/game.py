@@ -25,11 +25,17 @@ class Game(Entity):
         self.started = False
         self.mode = 'normal'
         self.mode_text = None
+        self.camera_controller = None
         
         # Power-up spawning
         self.powerup_spawn_timer = 0
         self.powerup_spawn_interval = 15  # Spawn a power-up every 15 seconds
         self.max_powerups = 3  # Maximum number of power-ups allowed at once
+        
+        # Enemy spawning
+        self.enemy_spawn_timer = 0
+        self.enemy_spawn_interval = 10  # Spawn a new enemy every 10 seconds
+        self.max_enemies = 12  # Maximum number of enemies at once
 
     def setup(self):
         try:
@@ -49,27 +55,80 @@ class Game(Entity):
         if self.mode_text:
             destroy(self.mode_text)
         
+        # Setup environment first so buildings are ready
+        self.setup_environment()
+        
+        # Find a safe position for the player
+        safe_position = self.find_safe_spawn_position()
+        
         # Setup player and pass UI reference for health updates
         self.player = Player()
+        self.player.position = safe_position  # Set player at safe position
         self.player.crazy_mode = (self.mode == 'crazy')
         self.player.max_health = self.ui.max_health  # Sync max health
         self.player.health = self.ui.health  # Sync initial health
         
-        # Setup the rest of the game
-        self.setup_environment()
-        self.spawn_enemies()
+        # Give environment a reference to the player for targeting
+        if hasattr(self, 'environment'):
+            self.environment.player = self.player
+        
+        # Spawn initial enemies
+        self.spawn_enemies(7)  # Start with 7 enemies (including 2 seekers)
         self.spawn_powerup()
+        
         # Initialize camera after player is created
         self.camera_controller = setup_camera(self.player)
         self.started = True
 
-    def spawn_enemies(self):
-        for _ in range(5):  # Spawn 5 enemies for example
-            enemy = Enemy()
+    def spawn_enemies(self, count=1, force_seeker=False):
+        """Spawn specified number of enemies, with optional forced seeker type"""
+        for _ in range(count):
+            # Find a safe position away from buildings and player
+            safe_position = self.find_safe_spawn_position()
+            
+            if force_seeker:
+                enemy_type = 'seeker'
+            else:
+                # 30% chance for seeker, 70% for other types by default
+                enemy_type = None  # Let the Enemy class decide based on its weighted distribution
+                
+            # Create the enemy
+            enemy = Enemy(position=safe_position, enemy_type=enemy_type)
+            print(f"Spawned {enemy.enemy_type} enemy at position {safe_position}")
             self.enemies.append(enemy)
 
+    def find_safe_spawn_position(self):
+        """Find a position that's away from buildings and the player"""
+        min_player_distance = 10  # Minimum distance from player
+        
+        for _ in range(15):  # Try 15 times to find a good spot
+            pos_x = random.uniform(-20, 20)
+            pos_z = random.uniform(-20, 20)
+            position = Vec3(pos_x, 1, pos_z)
+            
+            # Check player distance
+            if self.player:
+                player_distance = (position - self.player.position).length()
+                if player_distance < min_player_distance:
+                    continue  # Too close to player
+            
+            # Check if position is clear of buildings using raycast
+            hit_info = raycast(
+                origin=Vec3(pos_x, 10, pos_z),  # Cast from above
+                direction=Vec3(0, -1, 0),  # Cast downward
+                distance=20,
+                ignore=[self.player] + (self.player.segments if self.player else [])
+            )
+            
+            # If no building at position, it's safe to spawn
+            if not hit_info.hit or not hasattr(hit_info.entity, 'name') or 'building' not in hit_info.entity.name:
+                return position
+        
+        # If we couldn't find a spot after 15 tries, use a fallback position
+        return Vec3(random.uniform(-5, 5), 1, random.uniform(-5, 5))
+
     def setup_environment(self):
-        # Initialize the game environment here
+        # Initialize the game environment
         self.environment = Environment()
 
     def update(self):
@@ -77,19 +136,42 @@ class Game(Entity):
             return
 
         if not self.game_over:
-            self.player.update()
-            for enemy in self.enemies:
-                enemy.update()
-            self.check_collisions()
-            self.update_powerups()
-            
-            # Update UI score from game state
-            if self.ui:
-                self.ui.set_score(self.score)
-            
-            # Check for game over condition
-            if self.player and self.player.health <= 0:
-                self.game_over_sequence()
+            try:
+                # Update enemy spawning
+                self.enemy_spawn_timer += time.dt
+                if self.enemy_spawn_timer >= self.enemy_spawn_interval and len(self.enemies) < self.max_enemies:
+                    self.spawn_enemies(1)  # Spawn one new enemy
+                    self.enemy_spawn_timer = 0
+                
+                # Update player
+                if self.player and self.player.enabled:
+                    self.player.update()
+                
+                # Update enemies
+                for enemy in list(self.enemies):
+                    # Skip enemies that may have been removed
+                    if not enemy or not enemy.enabled:
+                        continue
+                    enemy.update()
+                
+                # Update environment
+                if self.environment:
+                    self.environment.update()
+                    
+                self.check_collisions()
+                self.update_powerups()
+                
+                # Update UI score from game state
+                if self.ui:
+                    self.ui.set_score(self.score)
+                
+                # Check for game over condition
+                if self.player and self.player.health <= 0:
+                    self.game_over_sequence()
+            except Exception as e:
+                print(f"Error in game update loop: {e}")
+                import traceback
+                traceback.print_exc()
 
     def update_powerups(self):
         """Handle power-up spawning and timeouts"""
@@ -103,56 +185,73 @@ class Game(Entity):
 
     def spawn_powerup(self):
         """Spawn a random power-up in the game world"""
-        # Find a safe position away from buildings
-        for _ in range(10):  # Try up to 10 times to find a good spot
-            pos_x = random.uniform(-20, 20)
-            pos_z = random.uniform(-20, 20)
-            
-            # Check if position is clear of buildings
-            hit_info = raycast(
-                origin=Vec3(pos_x, 10, pos_z),  # Cast from above
-                direction=Vec3(0, -1, 0),  # Cast downward
-                distance=20,
-                ignore=[self.player] + self.player.segments
-            )
-            
-            # If no building at position, it's safe to spawn
-            if not hit_info.hit or not hasattr(hit_info.entity, 'name') or 'building' not in hit_info.entity.name:
-                # Create power-up at position
-                powerup = PowerUp(position=(pos_x, 1, pos_z))
-                self.powerups.append(powerup)
-                print(f"Spawned {powerup.powerup_type} power-up at ({pos_x:.1f}, 1, {pos_z:.1f})")
-                return
+        # Use the safe position finder
+        position = self.find_safe_spawn_position()
         
-        # If we couldn't find a safe spot after 10 tries, spawn at a default location
-        powerup = PowerUp(position=(0, 1, -10))
+        # Create power-up at position
+        powerup = PowerUp(position=position)
         self.powerups.append(powerup)
-        print(f"Spawned {powerup.powerup_type} power-up at fallback position")
+        print(f"Spawned {powerup.powerup_type} power-up at ({position.x:.1f}, {position.y:.1f}, {position.z:.1f})")
 
     def check_collisions(self):
-        # Check enemy collisions
+        # Check enemy collisions with player's head
         for enemy in list(self.enemies):
             if not enemy or not self.player:
                 continue
                 
             try:
-                # Check collision with enemy
+                # Check collision with player's head
                 hit_info = self.player.intersects(enemy)
-                if hit_info.hit:
-                    print(f"Hit enemy! Distance: {hit_info.distance}")
-                    # Increase score
-                    self.score += 1
-                    print(f"Score: {self.score}")
-                    # Remove the enemy
-                    enemy.disable()
-                    self.enemies.remove(enemy)
-                    # Grow the snake
-                    self.player.grow()
-                    # Add to combo
-                    self.player.add_combo()
-                    # Spawn a new enemy
-                    new_enemy = Enemy(position=(random.uniform(-15, 15), 1, random.uniform(-15, 15)))
-                    self.enemies.append(new_enemy)
+                
+                # Special handling for seekers - they damage the player but die in the process
+                if enemy.enemy_type == 'seeker':
+                    if hit_info.hit:
+                        # Seeker hit the player - deal damage
+                        self.player.take_damage_from_enemy(enemy)
+                        
+                        # Seeker dies after hitting player
+                        enemy.disable()
+                        self.enemies.remove(enemy)
+                        
+                        # Spawn a replacement seeker
+                        if random.random() < 0.5:  # 50% chance to spawn a new seeker
+                            self.spawn_enemies(1, force_seeker=True)
+                else:
+                    # Regular enemies can be eaten by the player's head
+                    if hit_info.hit:
+                        print(f"Player hit {enemy.enemy_type} enemy! Distance: {hit_info.distance}")
+                        # Increase score based on enemy points value
+                        enemy_points = getattr(enemy, 'points', 1)
+                        self.score += enemy_points
+                        print(f"Score: {self.score}, added {enemy_points} points")
+                        
+                        # Remove the enemy
+                        enemy.disable()
+                        self.enemies.remove(enemy)
+                        
+                        # Grow the snake
+                        self.player.grow()
+                        
+                        # Add to combo
+                        self.player.add_combo()
+                        
+                        # 15% chance to spawn a seeker in place of a regular enemy
+                        # to maintain challenge as player grows
+                        if random.random() < 0.15:
+                            self.spawn_enemies(1, force_seeker=True)
+                        else:
+                            # Spawn a replacement enemy of random type
+                            self.spawn_enemies(1)
+                
+                # Check collisions with player's body segments (except for seekers, already handled)
+                if enemy.enemy_type != 'seeker' and self.player.segments and not self.player.is_invisible:
+                    for segment in self.player.segments:
+                        segment_hit = segment.intersects(enemy)
+                        if segment_hit.hit:
+                            # Player takes damage from enemy
+                            self.player.take_damage_from_enemy(enemy)
+                            break
+                            
             except Exception as e:
                 print(f"Error in enemy collision detection: {e}")
         
@@ -170,6 +269,9 @@ class Game(Entity):
                     powerup.on_collect(self.player)
                     # Remove from tracking list
                     self.powerups.remove(powerup)
+                    # Update UI if needed
+                    if self.ui and hasattr(self.ui, 'update_powerup_display'):
+                        self.ui.update_powerup_display(powerup.powerup_type, powerup.duration)
             except Exception as e:
                 print(f"Error in power-up collision detection: {e}")
     
@@ -200,21 +302,12 @@ class Game(Entity):
         if key == 'r' and self.game_over:
             self.restart()
         
-        # Toggle first/third person view with keys 1/2
-        elif key == '1':
-            # First-person view
-            if self.player:
-                camera.position = self.player.position + Vec3(0, 1, 0)
-                camera.parent = self.player
-                camera.rotation = (0, 0, 0)
-                print("First-person view activated")
-        elif key == '2':
-            # Third-person view
-            if self.player:
-                camera.parent = scene
-                camera.position = self.player.position + Vec3(0, 10, -10)
-                camera.look_at(self.player, 'forward')
-                print("Third-person view activated")
+        # Toggle camera view with 1/2
+        elif self.camera_controller:
+            if key == '1' and hasattr(self.camera_controller, 'set_mode'):
+                self.camera_controller.set_mode('first_person')
+            elif key == '2' and hasattr(self.camera_controller, 'set_mode'):
+                self.camera_controller.set_mode('third_person')
     
     def restart(self):
         """Restart the game when R is pressed after game over"""
@@ -237,6 +330,7 @@ class Game(Entity):
         self.game_over = False
         self.score = 0
         self.powerup_spawn_timer = 0
+        self.enemy_spawn_timer = 0
         
         # Clear game over text
         for entity in scene.entities:
@@ -252,7 +346,7 @@ class Game(Entity):
             self.ui.reset()
             
         # Refresh game elements
-        self.spawn_enemies()
+        self.spawn_enemies(7)  # Restart with 7 enemies
         self.spawn_powerup()  # Initial power-up
 
 # Only run this if game.py is run directly

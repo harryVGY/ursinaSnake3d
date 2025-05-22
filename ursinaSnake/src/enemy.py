@@ -36,13 +36,25 @@ class Enemy(Entity):
             'points': 4,
             'model': 'sphere',
             'behavior': 'wander'
+        },
+        'seeker': {
+            'color': color.violet,
+            'scale': 1.1,
+            'speed': 1.5,  # Slower but persistent
+            'points': 5,   # Worth more points due to challenge
+            'model': 'sphere',
+            'behavior': 'seek'
         }
     }
 
     def __init__(self, position=(0, 0, 0), enemy_type=None):
-        # If no specific type provided, choose random type
+        # If no specific type provided, choose random type with weighted distribution
         if not enemy_type:
-            enemy_type = random.choice(list(Enemy.TYPES.keys()))
+            # 30% chance for seeker, 70% distributed among other types
+            if random.random() < 0.3:
+                enemy_type = 'seeker'
+            else:
+                enemy_type = random.choice(['crawler', 'runner', 'guardian', 'floater'])
         
         self.enemy_type = enemy_type
         self.config = Enemy.TYPES[enemy_type]
@@ -78,6 +90,13 @@ class Enemy(Entity):
         # Initialize next_direction_change for all enemies
         self.next_direction_change = random.uniform(1, 3)
         
+        # Seeker specific properties
+        self.seek_memory_time = 5.0  # Seconds seeker remembers player's last seen position
+        self.last_known_player_pos = None
+        self.seek_memory_timer = 0
+        self.path_indicator = None
+        self.path_update_timer = 0
+        
         # Initialize behavior specific properties
         self.setup_behavior()
         
@@ -101,6 +120,14 @@ class Enemy(Entity):
         elif self.behavior == 'wander':
             # Will randomly change direction
             self.next_direction_change = random.uniform(1, 3)
+            
+        elif self.behavior == 'seek':
+            # Create a visual path indicator for seekers
+            self.path_indicator = Entity(
+                model=Mesh(vertices=[], triangles=[]),
+                color=color.rgba(1, 0, 1, 0.4),
+                billboard=False
+            )
 
     def create_patrol_route(self):
         """Create a patrol route for this enemy"""
@@ -163,6 +190,33 @@ class Enemy(Entity):
                 loop=True
             )
             
+        elif self.enemy_type == 'seeker':
+            # Seeker has a distinctive pulsing glow effect
+            self.glow = Entity(
+                parent=self,
+                model='sphere',
+                scale=1.3,
+                color=color.rgba(0.8, 0, 0.8, 0.3),
+                billboard=False
+            )
+            
+            # Create pulsing animation
+            self.glow.animate_scale(
+                Vec3(1.7, 1.7, 1.7),
+                duration=2.0,
+                curve=curve.in_out_sine,
+                loop=True
+            )
+            
+            # Add a tracking beam effect
+            self.beam = Entity(
+                parent=self,
+                model='cube',
+                color=color.rgba(0.8, 0, 0.8, 0.2),
+                scale=(0.1, 0.1, 0.1),
+                billboard=False
+            )
+
     def create_movement_particle(self):
         """Create a particle at the runner's position to simulate trail effect"""
         if self.enemy_type == 'runner':
@@ -187,6 +241,8 @@ class Enemy(Entity):
             self.chase_behavior()
         elif self.behavior == 'wander':
             self.wander_behavior()
+        elif self.behavior == 'seek':
+            self.seek_behavior()
             
         # Add a subtle hover/bob to all enemies
         self.y = 1 + math.sin(self.time_alive * 2) * 0.1
@@ -197,6 +253,13 @@ class Enemy(Entity):
             if self.particle_timer <= 0:
                 self.create_movement_particle()
                 self.particle_timer = 0.1  # Create particle every 0.1 seconds
+        
+        # Update path indicator for seekers
+        if self.enemy_type == 'seeker' and self.path_indicator:
+            self.path_update_timer -= time.dt
+            if self.path_update_timer <= 0:
+                self.update_path_indicator()
+                self.path_update_timer = 0.5  # Update every half second
         
     def find_player(self):
         """Find player in the scene"""
@@ -295,30 +358,189 @@ class Enemy(Entity):
             self.direction = -self.direction
             self.look_at_2d(self.position + self.direction)
 
+    def seek_behavior(self):
+        """Intelligently seek out the player with memory of last known position"""
+        player = self.find_player()
+        
+        # If we can see the player directly, update last known position
+        if player:
+            player_distance = (player.position - self.position).length()
+            player_direction = (player.position - self.position).normalized()
+            
+            # Store last known position and reset timer
+            self.last_known_player_pos = Vec3(player.position)
+            self.seek_memory_timer = self.seek_memory_time
+            
+            # If player is within detection range, move directly toward them
+            if player_distance < self.detection_range:
+                # Direct movement toward player
+                direction = player_direction
+                direction.y = 0
+                self.position += direction * self.speed * time.dt
+                self.look_at_2d(player.position)
+                
+                # Remove beam visual - this removes the laser from the sky
+                if hasattr(self, 'beam'):
+                    self.beam.visible = False
+                return
+        
+        # If we have a memory of player position but can't see them directly
+        if self.last_known_player_pos:
+            # Count down memory timer
+            self.seek_memory_timer -= time.dt
+            
+            if self.seek_memory_timer > 0:
+                # Move toward last known position
+                direction = (self.last_known_player_pos - self.position).normalized()
+                direction.y = 0
+                self.position += direction * self.speed * time.dt
+                self.look_at_2d(self.last_known_player_pos)
+                
+                # Hide beam while tracking to memory
+                if hasattr(self, 'beam'):
+                    self.beam.visible = False
+                
+                # If reached last known position, clear memory
+                if (self.last_known_player_pos - self.position).length() < 1:
+                    self.last_known_player_pos = None
+                    self.seek_memory_timer = 0
+                return
+            else:
+                # Memory expired
+                self.last_known_player_pos = None
+        
+        # If no direct sight or memory, perform smart wander
+        # This wander is different - it tries to search areas not recently visited
+        self.next_direction_change -= time.dt
+        if self.next_direction_change <= 0:
+            # Choose new intelligent direction - prefer unexplored areas
+            # Find a direction away from current position toward center of map
+            center_pull = Vec3(0, 0, 0) - self.position
+            random_component = Vec3(
+                random.uniform(-1, 1),
+                0,
+                random.uniform(-1, 1)
+            )
+            
+            # Combine center pull with randomness
+            self.direction = (center_pull.normalized() * 0.3 + random_component * 0.7).normalized()
+            self.next_direction_change = random.uniform(2, 4)  # Longer wander segments
+            
+        # Apply movement
+        self.position += self.direction * self.speed * time.dt
+        self.look_at_2d(self.position + self.direction)
+        
+        # Boundary check
+        if abs(self.x) > 24 or abs(self.z) > 24:
+            # Hit boundary - reverse and head more toward center
+            self.direction = -self.direction + (Vec3(0, 0, 0) - self.position).normalized() * 0.5
+            self.direction = self.direction.normalized()
+            self.next_direction_change = random.uniform(1, 2)
+
+    def update_path_indicator(self):
+        """Update the visual path indicator for seekers"""
+        if not self.path_indicator:
+            return
+            
+        if self.last_known_player_pos:
+            try:
+                # Create a path from seeker to last known player position
+                start_pos = self.position + Vec3(0, 0.1, 0)  # Slightly above ground
+                end_pos = self.last_known_player_pos + Vec3(0, 0.1, 0)
+                
+                # Calculate the direction and length for the cylinder
+                direction = end_pos - start_pos
+                distance = direction.length()
+                
+                if distance > 0:
+                    # Use a simple entity instead of trying to create a complex mesh
+                    # This method is more stable and less prone to errors
+                    if not hasattr(self.path_indicator, 'indicator_line'):
+                        # Create a line object if it doesn't exist
+                        self.path_indicator.indicator_line = Entity(
+                            parent=self.path_indicator,
+                            model='cube',
+                            color=color.rgba(1, 0, 1, 0.4),
+                            scale_y=0.1,
+                            scale_z=0.1
+                        )
+                    
+                    # Update the line's position, scale and rotation to connect the points
+                    line = self.path_indicator.indicator_line
+                    line.position = start_pos + direction/2
+                    line.scale_x = distance  # Length is the distance
+                    
+                    # Make the line look at the target (rotate it appropriately)
+                    line.look_at(end_pos)
+                    
+                    # Make path indicator visible
+                    self.path_indicator.visible = True
+                else:
+                    self.path_indicator.visible = False
+            except Exception as e:
+                print(f"Error updating path indicator: {e}")
+                # If there's any error, hide the indicator
+                self.path_indicator.visible = False
+        else:
+            self.path_indicator.visible = False
+            
     def look_at_2d(self, target_pos):
         """Look at target but only in the y-axis rotation"""
         direction = target_pos - self.position
         self.rotation_y = math.degrees(math.atan2(direction.z, direction.x)) + 90
-        
+
     def on_disable(self):
         """Called when the enemy is disabled (eaten by snake)"""
-        # Create particle effect when eaten
-        for _ in range(10):
-            particle = Entity(
-                model='sphere',
-                color=self.color,
-                position=self.position,
-                scale=0.2,
-                lifetime=1
-            )
-            # Random direction particle burst
-            particle.animate_position(
-                self.position + Vec3(
-                    random.uniform(-2, 2),
-                    random.uniform(0, 2),
-                    random.uniform(-2, 2)
-                ),
-                duration=0.5
-            )
-            particle.animate_scale(0, duration=0.5)
-            destroy(particle, delay=0.5)
+        # Create extra dramatic effect for seeker death
+        if self.enemy_type == 'seeker':
+            # Create more dramatic explosion for seekers
+            for _ in range(20):
+                particle = Entity(
+                    model='sphere',
+                    color=color.violet,
+                    position=self.position,
+                    scale=random.uniform(0.3, 0.8)
+                )
+                # Particle animation
+                particle.animate_position(
+                    self.position + Vec3(
+                        random.uniform(-3, 3),
+                        random.uniform(0, 3),
+                        random.uniform(-3, 3)
+                    ),
+                    duration=random.uniform(0.5, 1.0)
+                )
+                particle.animate_scale(0, duration=random.uniform(0.7, 1.2))
+                particle.animate_color(color.rgba(0.8, 0, 0.8, 0), duration=random.uniform(0.7, 1.2))
+                destroy(particle, delay=1.2)
+                
+            # Destroy the path indicator and other effects
+            if self.path_indicator:
+                destroy(self.path_indicator)
+            if hasattr(self, 'glow'):
+                destroy(self.glow)
+            if hasattr(self, 'beam'):
+                destroy(self.beam)
+        
+        # Standard particle effect for other enemies
+        else:
+            # Create particle effect when eaten
+            for _ in range(10):
+                particle = Entity(
+                    model='sphere',
+                    color=self.color,
+                    position=self.position,
+                    scale=0.2,
+                    lifetime=1
+                )
+                # Random direction particle burst
+                particle.animate_position(
+                    self.position + Vec3(
+                        random.uniform(-2, 2),
+                        random.uniform(0, 2),
+                        random.uniform(-2, 2)
+                    ),
+                    duration=0.5
+                )
+                particle.animate_scale(0, duration=0.5)
+                destroy(particle, delay=0.5)

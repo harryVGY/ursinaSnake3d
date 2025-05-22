@@ -1,38 +1,68 @@
 from ursina import *
-from random import randint, uniform
+from random import randint, uniform, choice
 import random
 import os
 import shutil
 import math
 
 # Define the base path for KayKit assets relative to the project root
-KAYKIT_ASSETS_RELATIVE_PATH = os.path.join("KayKit_City_Builder_Bits_1.0_FREE", "Assets")
+KAYKIT_ASSETS_RELATIVE_PATH = os.path.join("..", "..", "KayKit_City_Builder_Bits_1.0_FREE", "Assets")
 
 class Environment(Entity):
-    def __init__(self):
+    def __init__(self, map_size=25):
+        """
+        Initialize the environment with the specified map size.
+        
+        Args:
+            map_size (int): The size of the map (half-width and half-length)
+        """
         super().__init__()
         print("Initializing environment...")
+        
+        # Store map size for use in other methods
+        self.map_size = map_size
         
         # Get the base directory of the script to build absolute paths
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(self.script_dir)
         self.assets_root = os.path.join(self.project_root, "assets")
-        self.kaykit_base_path = os.path.abspath(os.path.join(self.project_root, KAYKIT_ASSETS_RELATIVE_PATH))
+        self.kaykit_base_path = os.path.abspath(os.path.join(self.script_dir, KAYKIT_ASSETS_RELATIVE_PATH))
         
+        # Initialize storage for environment objects
+        self.buildings = []      # Store buildings for reference
+        self.dynamic_elements = []  # Elements that can change during gameplay
+        self.borders = []        # Store border objects
+        
+        # Create modern environment components
         self.create_ground()
-        self.buildings = []  # Store buildings for reference
-        self.dynamic_elements = []  # Initialize dynamic_elements list before using it
-        self.building_models, self.building_texture = self.load_building_assets() # Load models and texture
+        
+        # Load assets before creating city
+        self.building_models, self.building_texture = self.load_building_assets()
+        
+        # Create the city and obstacles
         self.create_city_layout()
-        # Lower buildings by 50% (shift vertically, not scale)
-        for building in self.buildings:
-            building.y *= 0.5
+        
+        # Fix any buildings that might be floating or outside map boundaries
+        self.fix_building_positions()
+        
+        # Create obstacles and other elements
         self.create_obstacles()
         self.create_dynamic_elements()
+        
+        # Create the map border last (after buildings are placed)
+        self.create_modern_map_border()
+        
+        # Player reference (will be set by game.py)
+        self.player = None
 
     def create_ground(self):
-        # Create a large textured ground plane
+        """
+        Create a large textured ground plane with modern design.
+        Adjusts size based on the map_size parameter.
+        """
+        # Create/check for ground texture
         ground_texture_path = os.path.join(self.assets_root, "textures", "ground_texture.png") 
+        
         # Fallback texture if the specific one doesn't exist
         ground_texture = 'grass'  # Use a built-in texture or a known good one
         
@@ -41,13 +71,41 @@ class Environment(Entity):
         else:
             print(f"Warning: Ground texture not found at {ground_texture_path}. Using fallback.")
 
+        # Create ground entity with size matched to map_size
         self.ground = Entity(
             model='plane',
-            scale=(50, 1, 50),
+            scale=(self.map_size * 2, 1, self.map_size * 2),  # Double the map_size for full width/length
             texture=ground_texture, 
             texture_scale=(10, 10),
-            collider='box'
+            color=color.rgba(0.8, 0.8, 0.9, 1.0),  # Light blue-gray tint for modern look
+            collider='box',
+            position=(0, 0, 0)  # Ensure ground is at y=0
         )
+        
+        # Add grid lines for a modern tech look - adjust spacing based on map size
+        grid_spacing = max(5, self.map_size // 5)  # Ensure reasonable spacing
+        
+        # Create horizontal grid lines
+        for x in range(-self.map_size, self.map_size + 1, grid_spacing):
+            Entity(
+                model='quad',
+                scale=(0.1, self.map_size * 2, 1),
+                rotation_x=90,
+                position=(x, 0.01, 0),  # Slightly above ground to prevent z-fighting
+                color=color.rgba(0.3, 0.6, 0.9, 0.3),
+                texture='white_cube'
+            )
+        
+        # Create vertical grid lines
+        for z in range(-self.map_size, self.map_size + 1, grid_spacing):
+            Entity(
+                model='quad',
+                scale=(self.map_size * 2, 0.1, 1),
+                rotation_x=90,
+                position=(0, 0.01, z),  # Slightly above ground to prevent z-fighting
+                color=color.rgba(0.3, 0.6, 0.9, 0.3),
+                texture='white_cube'
+            )
 
     def load_building_assets(self):
         """Load custom building models and the shared texture from assets folder, copying if necessary."""
@@ -144,33 +202,108 @@ class Environment(Entity):
         
         return building_models, building_texture
 
+    def fix_building_positions(self):
+        """
+        Ensure all buildings are properly positioned:
+        1. Not floating in the air
+        2. Within map boundaries
+        3. At appropriate height
+        """
+        for building in self.buildings:
+            # Fix y position to ensure buildings aren't floating
+            # The y position should be half the building's height
+            building.y = building.scale_y / 2
+            
+            # Keep buildings within map boundaries
+            max_pos = self.map_size / 2 - building.scale_x / 2  # Leave room for the border
+            
+            # Clamp x position
+            if building.x > max_pos:
+                building.x = max_pos
+            elif building.x < -max_pos:
+                building.x = -max_pos
+                
+            # Clamp z position
+            if building.z > max_pos:
+                building.z = max_pos
+            elif building.z < -max_pos:
+                building.z = -max_pos
+                
+        print(f"Fixed positions for {len(self.buildings)} buildings")
+
+    def _fix_building_overlaps(self):
+        """
+        Check for and fix overlapping buildings.
+        
+        This method iterates through all buildings and checks for overlaps.
+        If buildings are too close or overlapping, it adjusts their positions.
+        """
+        min_distance = 5.0  # Minimum distance between buildings
+        
+        # Check each pair of buildings
+        for i, building1 in enumerate(self.buildings):
+            for j, building2 in enumerate(self.buildings):
+                if i != j:  # Don't compare a building with itself
+                    # Calculate distance between buildings
+                    distance = (building1.position - building2.position).length()
+                    
+                    # If buildings are too close
+                    if distance < min_distance:
+                        # Calculate direction vector between buildings
+                        direction = building1.position - building2.position
+                        if direction.length() > 0:  # Avoid division by zero
+                            direction = direction.normalized()
+                        else:
+                            # If buildings are exactly at the same position, move in random direction
+                            direction = Vec3(
+                                random.uniform(-1, 1),
+                                0,
+                                random.uniform(-1, 1)
+                            ).normalized()
+                        
+                        # Move buildings apart
+                        adjustment = direction * (min_distance - distance) / 2
+                        building1.position += adjustment
+                        building2.position -= adjustment
+                        
+                        # Make sure buildings stay within map bounds
+                        for building in (building1, building2):
+                            # Clamp X and Z coordinates to stay within map boundaries
+                            building.x = max(min(building.x, self.map_size - 2), -self.map_size + 2)
+                            building.z = max(min(building.z, self.map_size - 2), -self.map_size + 2)
+        
+        print("Fixed building overlaps")
+
     def _create_cube_city(self):
-        """Create a city with procedurally textured cube buildings"""
-        # Building type definitions with procedural texture generation
+        """Create a city with modern procedurally textured buildings"""
+        # Modern building type definitions with procedural texture generation
         building_types = [
-            {'height': randint(5, 10), 'base_color': color.light_gray},
-            {'height': randint(4, 7), 'base_color': color.gray},
-            {'height': randint(6, 12), 'base_color': color.dark_gray},
-            {'height': randint(4, 8), 'base_color': color.rgba(0.6, 0.6, 0.7, 1)},
+            {'height': randint(5, 10), 'base_color': color.rgba(0.8, 0.8, 0.9, 1.0)},  # Light blue-gray
+            {'height': randint(4, 7), 'base_color': color.rgba(0.7, 0.8, 0.85, 1.0)},  # Cool blue-gray
+            {'height': randint(6, 12), 'base_color': color.rgba(0.75, 0.75, 0.8, 1.0)},  # Steel gray
+            {'height': randint(4, 8), 'base_color': color.rgba(0.85, 0.9, 0.95, 1.0)},  # Light steel blue
         ]
         
-        for x in range(-20, 21, 8):
-            for z in range(-20, 21, 8):
-                if random.random() < 0.3:
+        # Create buildings in a grid pattern with much more randomness and space
+        # Expanded map size from -20,20 to -30,30
+        for x in range(-30, 31, 10):  # Increased map size 
+            for z in range(-30, 31, 10):  # Increased map size
+                # 50% chance to skip a building to create open spaces
+                if random.random() < 0.5:
                     continue
                     
                 pos_x = x + uniform(-1, 1)
                 pos_z = z + uniform(-1, 1)
-                self._create_procedural_building(pos_x, pos_z, building_types)
+                self._create_modern_building(pos_x, pos_z, building_types)
 
-    def _create_procedural_building(self, pos_x, pos_z, building_types=None):
-        """Create a building with procedurally generated texture"""
+    def _create_modern_building(self, pos_x, pos_z, building_types=None):
+        """Create a building with modern design"""
         if not building_types:
             building_types = [
-                {'height': randint(5, 10), 'base_color': color.light_gray},
-                {'height': randint(4, 7), 'base_color': color.gray},
-                {'height': randint(6, 12), 'base_color': color.dark_gray},
-                {'height': randint(4, 8), 'base_color': color.rgba(0.6, 0.6, 0.7, 1)},
+                {'height': randint(5, 10), 'base_color': color.rgba(0.8, 0.8, 0.9, 1.0)},
+                {'height': randint(4, 7), 'base_color': color.rgba(0.7, 0.8, 0.85, 1.0)},
+                {'height': randint(6, 12), 'base_color': color.rgba(0.75, 0.75, 0.8, 1.0)},
+                {'height': randint(4, 8), 'base_color': color.rgba(0.85, 0.9, 0.95, 1.0)},
             ]
             
         # Select random building type
@@ -179,16 +312,19 @@ class Environment(Entity):
         width = random.randint(2, 4)
         depth = random.randint(2, 4)
         
-        # Create the main building structure
+        # Randomly choose building shape - sometimes create interesting shapes
+        shape_type = random.choice(['cube', 'L', 'tower'])
+        
         building = Entity(
             model='cube',
-            position=(pos_x, height/2, pos_z),  # Position at half height
+            position=(pos_x, height/2, pos_z),
             scale=(width, height, depth),
+            color=building_type['base_color'],
             name=f'building_cube_{len(self.buildings)}'
         )
         
-        # Generate a procedural texture for the building - no external files needed
-        building_texture = self.generate_building_texture(
+        # Generate modern texture with large glass windows
+        building_texture = self.generate_modern_building_texture(
             building_type['base_color'], 
             width=128, 
             height=128,
@@ -196,25 +332,83 @@ class Environment(Entity):
         )
         
         building.texture = building_texture
-        
-        # Make sure it has a proper collider
         building.collider = 'box'
         
-        # Add a simple roof
+        # Add architectural details based on building shape
+        if shape_type == 'L':
+            # Create L-shaped building by adding a wing
+            wing = Entity(
+                parent=building,
+                model='cube',
+                position=(-(width/2), 0, depth/2),
+                scale=(width/2, 0.9, depth/2),
+                color=building_type['base_color'],
+                texture=building_texture
+            )
+        elif shape_type == 'tower':
+            # Create tower with narrower top section
+            tower_top = Entity(
+                parent=building,
+                model='cube',
+                position=(0, height/2, 0),
+                scale=(width*0.6, height*0.3, depth*0.6),
+                color=building_type['base_color'],
+                texture=building_texture
+            )
+            
+            # Add antenna or spire to some tall buildings
+            if height > 8 and random.random() < 0.7:
+                antenna = Entity(
+                    parent=building,
+                    model='cylinder',
+                    position=(0, height, 0),
+                    scale=(0.1, random.uniform(1, 2), 0.1),
+                    color=color.light_gray
+                )
+        
+        # Add a modern roof with potential for roof garden (green) or solar panels (blue tint)
+        roof_type = random.choice(['garden', 'solar', 'plain'])
+        roof_color = color.rgba(0.2, 0.6, 0.3, 1.0) if roof_type == 'garden' else \
+                    color.rgba(0.2, 0.4, 0.7, 1.0) if roof_type == 'solar' else \
+                    color.dark_gray
+                    
         roof = Entity(
             parent=building,
             model='cube',
             position=(0, 0.5, 0),
-            scale=(1, 0.1, 1),
-            color=color.dark_gray
+            scale=(1, 0.05, 1),
+            color=roof_color
         )
+        
+        # Add roof details
+        if roof_type == 'garden':
+            # Add some greenery spots
+            for _ in range(3):
+                spot = Entity(
+                    parent=roof,
+                    model='cube',
+                    scale=(random.uniform(0.1, 0.3), 0.1, random.uniform(0.1, 0.3)),
+                    position=(random.uniform(-0.4, 0.4), 0.1, random.uniform(-0.4, 0.4)),
+                    color=color.rgba(0.1, 0.5, 0.1, 1.0)
+                )
+        elif roof_type == 'solar':
+            # Add solar panel grid
+            for x in range(-1, 2):
+                for z in range(-1, 2):
+                    panel = Entity(
+                        parent=roof,
+                        model='quad',
+                        scale=(0.2, 0.2, 0.2),
+                        position=(x*0.3, 0.1, z*0.3),
+                        rotation_x=90,
+                        color=color.rgba(0.1, 0.3, 0.8, 1.0)
+                    )
 
         self.buildings.append(building)
         return building
 
-    def generate_building_texture(self, base_color, width=128, height=128, window_color=color.azure):
-        """Generate a procedural building texture with windows and details"""
-        # Create a new texture using Ursina's Texture class
+    def generate_modern_building_texture(self, base_color, width=128, height=128, window_color=color.azure):
+        """Generate a procedural texture for modern glass buildings"""
         from PIL import Image, ImageDraw
         import numpy as np
         
@@ -223,49 +417,98 @@ class Environment(Entity):
         img = Image.new('RGBA', (width, height), (r, g, b, 255))
         draw = ImageDraw.Draw(img)
         
-        # Add windows
-        num_floors = random.randint(4, 8)
-        num_windows_x = random.randint(3, 6)
-        
-        window_width = width // (num_windows_x * 2)
-        window_height = height // (num_floors * 2)
-        window_spacing_x = width // num_windows_x
-        window_spacing_y = height // num_floors
+        # Decide between different modern facade patterns
+        pattern_type = random.choice(['grid', 'horizontal', 'vertical', 'asymmetric'])
         
         # Convert window color to RGB
         w_r, w_g, w_b = int(window_color.r * 255), int(window_color.g * 255), int(window_color.b * 255)
         
-        # Drawing pattern depends on time of day - some windows lit, some dark
-        for floor in range(num_floors):
-            for win_x in range(num_windows_x):
-                # Randomize window lighting
-                if random.random() < 0.7:  # 70% of windows are lit
-                    window_fill = (w_r, w_g, w_b, 255)
-                else:
-                    # Dark window
-                    window_fill = (30, 30, 40, 255)
+        if pattern_type == 'grid':
+            # Modern grid pattern - common in glass skyscrapers
+            grid_cols = random.randint(4, 8)
+            grid_rows = random.randint(8, 16)
+            
+            cell_width = width // grid_cols
+            cell_height = height // grid_rows
+            
+            for row in range(grid_rows):
+                for col in range(grid_cols):
+                    # Create glass panel
+                    x1 = col * cell_width + 2  # Small gap between panels
+                    y1 = row * cell_height + 2
+                    x2 = (col + 1) * cell_width - 2
+                    y2 = (row + 1) * cell_height - 2
                     
-                # Draw the window
-                x1 = win_x * window_spacing_x + (window_spacing_x - window_width) // 2
-                y1 = floor * window_spacing_y + (window_spacing_y - window_height) // 2
-                x2 = x1 + window_width
-                y2 = y1 + window_height
+                    # Randomize reflection/lighting slightly
+                    reflection = random.randint(-20, 20)
+                    panel_color = (
+                        min(255, max(0, w_r + reflection)),
+                        min(255, max(0, w_g + reflection)),
+                        min(255, max(0, w_b + reflection)),
+                        255
+                    )
+                    
+                    draw.rectangle([x1, y1, x2, y2], fill=panel_color)
+                    
+        elif pattern_type == 'horizontal':
+            # Horizontal bands of glass and material
+            bands = random.randint(6, 12)
+            band_height = height // bands
+            
+            for i in range(bands):
+                y1 = i * band_height
+                y2 = (i + 1) * band_height - 2  # Gap between bands
                 
-                draw.rectangle([x1, y1, x2, y2], fill=window_fill)
+                # Alternate between glass and material
+                if i % 2 == 0:
+                    draw.rectangle([0, y1, width, y2], fill=(w_r, w_g, w_b, 255))
+                else:
+                    # Structural band
+                    draw.rectangle([0, y1, width, y2], fill=(r-30, g-30, b-30, 255))
+                    
+        elif pattern_type == 'vertical':
+            # Vertical sections - common in modern architecture
+            sections = random.randint(3, 6)
+            section_width = width // sections
+            
+            for i in range(sections):
+                x1 = i * section_width
+                x2 = (i + 1) * section_width - 2
+                
+                # Alternate materials or use consistent glass
+                material_type = random.choice(['glass', 'solid'])
+                
+                if material_type == 'glass' or i % 2 == 0:
+                    draw.rectangle([x1, 0, x2, height], fill=(w_r, w_g, w_b, 255))
+                else:
+                    # Solid section
+                    draw.rectangle([x1, 0, x2, height], fill=(r-20, g-20, b-20, 255))
+                    
+        else:  # asymmetric
+            # Create an asymmetric modern pattern
+            # Large glass sections with accent strips
+            draw.rectangle([0, 0, width, height], fill=(w_r, w_g, w_b, 255))
+            
+            # Add random accent strips
+            num_accents = random.randint(2, 5)
+            for _ in range(num_accents):
+                # Decide between horizontal or vertical accent
+                if random.random() < 0.5:
+                    # Horizontal accent
+                    y_pos = random.randint(0, height)
+                    height_acc = random.randint(10, 30)
+                    draw.rectangle([0, y_pos, width, y_pos + height_acc], 
+                                  fill=(r-30, g-30, b-30, 255))
+                else:
+                    # Vertical accent
+                    x_pos = random.randint(0, width)
+                    width_acc = random.randint(10, 30)
+                    draw.rectangle([x_pos, 0, x_pos + width_acc, height], 
+                                  fill=(r-30, g-30, b-30, 255))
         
-        # Add some architectural details
-        # Horizontal lines between floors
-        for floor in range(num_floors + 1):
-            y = floor * window_spacing_y
-            draw.line([(0, y), (width, y)], fill=(r//2, g//2, b//2, 255), width=2)
-        
-        # Edge details
-        edge_color = (min(r+30, 255), min(g+30, 255), min(b+30, 255), 255)
-        draw.rectangle([0, 0, width-1, height-1], outline=edge_color, width=3)
-        
-        # Add some texture/noise for realism
+        # Add some subtle texture variation
         pixels = np.array(img)
-        noise = (np.random.rand(height, width, 4) * 20 - 10).astype(np.int32)
+        noise = (np.random.rand(height, width, 4) * 10 - 5).astype(np.int32)
         pixels = np.clip(pixels + noise, 0, 255).astype(np.uint8)
         img = Image.fromarray(pixels)
         
@@ -274,9 +517,68 @@ class Environment(Entity):
         return texture
 
     def create_city_layout(self):
-        """Create a city with procedurally generated buildings"""
+        """
+        Create a city with modern procedurally generated buildings.
+        
+        This method places buildings throughout the map while respecting the map
+        boundaries defined by self.map_size. It uses the previously loaded building
+        models or falls back to procedurally generated buildings if models aren't available.
+        """
         print("Creating city with procedural buildings")
-        self._create_cube_city()
+        
+        # Define safe zone from map edge to prevent buildings from being placed too close to borders
+        safe_margin = 2.0
+        safe_area_limit = self.map_size - safe_margin
+        
+        # If we have models available, try to use them
+        if self.building_models:
+            print(f"Using {len(self.building_models)} building model types")
+            num_buildings = 30  # Reasonable number of buildings for a small city
+            
+            # Generate buildings with proper spacing
+            for i in range(num_buildings):
+                # Choose random position within safe area
+                pos_x = random.uniform(-safe_area_limit, safe_area_limit)
+                pos_z = random.uniform(-safe_area_limit, safe_area_limit)
+                
+                # Choose random building type
+                building_type = random.choice(list(self.building_models.keys()))
+                model_path = self.building_models[building_type]
+                
+                # Random scale factor for variety
+                scale_factor = random.uniform(2.0, 4.0)
+                
+                try:
+                    # Create building with model
+                    building = Entity(
+                        model=model_path,
+                        texture=self.building_texture,
+                        position=(pos_x, 0, pos_z),  # Start at ground level
+                        scale=scale_factor,
+                        collider='box',
+                        name=f'building_{building_type}_{i}'
+                    )
+                    
+                    # Adjust Y position to align with ground
+                    building.y = building.scale_y / 2
+                    
+                    # Store the building
+                    self.buildings.append(building)
+                    print(f"Created building {building_type} at ({pos_x}, {pos_z})")
+                    
+                except Exception as e:
+                    print(f"Error creating building {building_type}: {e}")
+                    # Fall back to cube building if model fails to load
+                    self._create_modern_building(pos_x, pos_z)
+        else:
+            # Fall back to procedural cube buildings
+            print("No building models available, creating procedural cube buildings")
+            self._create_cube_city()
+            
+        # Check for overlapping buildings and fix their positions
+        self._fix_building_overlaps()
+        
+        print(f"City layout created with {len(self.buildings)} buildings")
 
     def create_obstacles(self):
         """Create various obstacles throughout the environment"""
@@ -390,7 +692,7 @@ class Environment(Entity):
         obstacles_list.append(obstacle)
 
     def create_dynamic_elements(self):
-        """Create dynamic environment elements like collapsible buildings and movable bridges"""
+        """Create dynamic environment elements - only collapsible buildings now"""
         # Set some buildings as collapsible
         for building in self.buildings:
             # 15% chance for a building to be collapsible
@@ -400,206 +702,43 @@ class Environment(Entity):
                 self.dynamic_elements.append(building)
                 print(f"Made building {building.name} collapsible")
                 
-                # Add a warning sign on top
+                # Add a modern warning indicator on top
                 warning = Entity(
                     parent=building,
-                    model='cube',
+                    model='sphere',  # More modern than cube
                     color=color.yellow,
-                    scale=(0.5, 0.5, 0.5),
+                    scale=(0.4, 0.4, 0.4),
                     y=5,  # Place on top of building
                     billboard=True  # Always face camera
                 )
                 # Make it blink
                 warning.animate_color(color.red, duration=0.5, loop=True)
-        
-        # Create bridges between some buildings
-        self.create_bridges()
-        
-        # Create traffic with moving vehicles
-        self.create_traffic()
-    
-    def create_bridges(self):
-        """Create movable bridges between buildings"""
-        self.bridges = []
-        
-        # Find pairs of buildings that are close enough for bridges
-        for i, building1 in enumerate(self.buildings):
-            for j, building2 in enumerate(self.buildings[i+1:], i+1):
-                # Calculate distance between buildings
-                distance = (building1.position - building2.position).length()
-                
-                # If buildings are between 8-15 units apart, they're candidates for a bridge
-                if 8 <= distance <= 15:
-                    # 25% chance to create a bridge
-                    if random.random() < 0.25:
-                        # Calculate bridge position and rotation
-                        bridge_pos = (building1.position + building2.position) / 2
-                        direction = building2.position - building1.position
-                        bridge_angle = math.degrees(math.atan2(direction.z, direction.x))
-                        
-                        # Create bridge entity
-                        bridge = Entity(
-                            model='cube',
-                            color=color.dark_gray,
-                            position=bridge_pos,
-                            scale=(distance, 0.5, 2),
-                            rotation_y=bridge_angle,
-                            collider='box',
-                            name=f'bridge_{len(self.bridges)}'
-                        )
-                        
-                        # Add railings
-                        left_railing = Entity(
-                            parent=bridge,
-                            model='cube',
-                            color=color.light_gray,
-                            position=(0, 0.5, -0.9),
-                            scale=(1, 0.5, 0.1)
-                        )
-                        
-                        right_railing = Entity(
-                            parent=bridge,
-                            model='cube',
-                            color=color.light_gray,
-                            position=(0, 0.5, 0.9),
-                            scale=(1, 0.5, 0.1)
-                        )
-                        
-                        # Store open/closed state
-                        bridge.is_open = False
-                        bridge.is_moving = False
-                        bridge.connected_buildings = (building1, building2)
-                        
-                        # Add bridge to dynamic elements
-                        self.bridges.append(bridge)
-                        self.dynamic_elements.append(bridge)
-                        
-                        print(f"Created bridge between buildings at ({bridge_pos.x:.1f}, {bridge_pos.z:.1f})")
-    
-    def create_traffic(self):
-        """Create moving vehicles that add dynamic obstacles"""
-        self.vehicles = []
-        
-        # Create a few main roads
-        for i in range(3):
-            # Create east-west road
-            z_pos = -15 + (i * 15)
-            
-            for j in range(3):  # 3 vehicles per road
-                # Create vehicle
-                vehicle = Entity(
-                    model='cube',
-                    color=color.random_color(),
-                    position=(random.uniform(-20, 20), 0.5, z_pos),
-                    scale=(2, 1, 1),
-                    collider='box',
-                    name=f'vehicle_ew_{i}_{j}'
-                )
-                
-                # Set movement properties
-                vehicle.direction = Vec3(1, 0, 0)  # Move east
-                if random.random() < 0.5:
-                    vehicle.direction = -vehicle.direction  # 50% chance to move west
-                    vehicle.rotation_y = 180
-                
-                vehicle.speed = random.uniform(3, 8)
-                vehicle.road_bounds = (-25, 25)  # X boundaries
-                
-                self.vehicles.append(vehicle)
-                self.dynamic_elements.append(vehicle)
-            
-            # Create north-south road
-            x_pos = -15 + (i * 15)
-            
-            for j in range(3):  # 3 vehicles per road
-                # Create vehicle
-                vehicle = Entity(
-                    model='cube',
-                    color=color.random_color(),
-                    position=(x_pos, 0.5, random.uniform(-20, 20)),
-                    scale=(1, 1, 2),
-                    collider='box',
-                    name=f'vehicle_ns_{i}_{j}'
-                )
-                
-                # Set movement properties
-                vehicle.direction = Vec3(0, 0, 1)  # Move north
-                if random.random() < 0.5:
-                    vehicle.direction = -vehicle.direction  # 50% chance to move south
-                    vehicle.rotation_y = 180
-                
-                vehicle.speed = random.uniform(3, 8)
-                vehicle.road_bounds = (-25, 25)  # Z boundaries
-                
-                self.vehicles.append(vehicle)
-                self.dynamic_elements.append(vehicle)
     
     def update(self):
         """Update dynamic environment elements"""
-        # Update elements like collapsing buildings, moving bridges and vehicles
-        for element in self.dynamic_elements:
-            # Handle collapsible buildings
-            if hasattr(element, 'collapsible') and not getattr(element, 'collapsed', True):
-                # Small random chance for buildings to collapse
-                if random.random() < 0.0005:  # Very low chance per frame
-                    element.collapsed = True
-                    element.animate_scale((element.scale_x, 0.2, element.scale_z), duration=1.0)
-                    element.animate_position((element.x, 0.1, element.z), duration=1.0)
-                    print(f"Building {element.name} collapsed!")
+        # Update elements like collapsing buildings only
+        # Wrap in try-except to prevent crashes
+        try:
+            for element in self.dynamic_elements:
+                # Skip if element has been destroyed
+                if not element or not element.enabled:
+                    continue
                     
-                    # Create dust cloud effect
-                    self.create_collapse_effect(element.position)
-            
-            # Handle bridges opening/closing
-            if element in self.bridges and not element.is_moving:
-                # Random chance to change bridge state
-                if random.random() < 0.0002:  # Very low chance per frame
-                    self.toggle_bridge(element)
-            
-            # Handle moving vehicles
-            if element in self.vehicles:
-                # Move vehicle
-                element.position += element.direction * element.speed * time.dt
-                
-                # Check if reached boundary
-                if element.direction.x != 0:  # East-west movement
-                    if element.x < element.road_bounds[0] or element.x > element.road_bounds[1]:
-                        element.direction = -element.direction  # Reverse direction
-                        element.rotation_y = 180 - element.rotation_y  # Turn around
-                
-                if element.direction.z != 0:  # North-south movement
-                    if element.z < element.road_bounds[0] or element.z > element.road_bounds[1]:
-                        element.direction = -element.direction  # Reverse direction
-                        element.rotation_y = 180 - element.rotation_y  # Turn around
-    
-    def toggle_bridge(self, bridge):
-        """Toggle a bridge between open and closed states"""
-        if bridge.is_moving:
-            return
-            
-        bridge.is_moving = True
-        if bridge.is_open:
-            # Close the bridge
-            print(f"Closing bridge {bridge.name}")
-            bridge.animate_position(
-                (bridge.x, 1, bridge.z),  # Lower to normal position
-                duration=2.0,
-                curve=curve.in_out_sine
-            )
-            bridge.is_open = False
-        else:
-            # Open the bridge
-            print(f"Opening bridge {bridge.name}")
-            bridge.animate_position(
-                (bridge.x, 5, bridge.z),  # Raise up
-                duration=2.0,
-                curve=curve.in_out_sine
-            )
-            bridge.is_open = True
-            
-        # Reset is_moving after animation completes
-        invoke(setattr, bridge, 'is_moving', False, delay=2.1)
-    
+                # Handle collapsible buildings
+                if hasattr(element, 'collapsible') and not getattr(element, 'collapsed', True):
+                    # Small random chance for buildings to collapse
+                    if random.random() < 0.0005:  # Very low chance per frame
+                        element.collapsed = True
+                        element.animate_scale((element.scale_x, 0.2, element.scale_z), duration=1.0)
+                        element.animate_position((element.x, 0.1, element.z), duration=1.0)
+                        print(f"Building {element.name} collapsed!")
+                        
+                        # Create dust cloud effect
+                        self.create_collapse_effect(element.position)
+        except Exception as e:
+            print(f"Error in environment update: {e}")
+            # This prevents crashes by catching any exceptions
+
     def create_collapse_effect(self, position):
         """Create dust cloud effect when buildings collapse"""
         # Create multiple dust particles
@@ -629,3 +768,260 @@ class Environment(Entity):
             
             # Destroy after animation
             destroy(dust, delay=2.0)
+    
+    def create_modern_map_border(self):
+        """
+        Create a sleek, modern border around the map that prevents the player from
+        leaving the map area but does not cause damage.
+        """
+        border_thickness = 0.5  # Thinner, more sleek
+        border_height = 4
+        
+        # Use a gradient of colors for a more modern look
+        border_colors = [
+            color.rgba(0.2, 0.4, 0.8, 0.7),  # Blue with transparency
+            color.rgba(0.1, 0.3, 0.7, 0.7),  # Darker blue with transparency
+            color.rgba(0.3, 0.5, 0.9, 0.7),  # Lighter blue with transparency
+            color.rgba(0.2, 0.4, 0.8, 0.7),  # Blue with transparency
+        ]
+        
+        # Create corner pillars for a modern look
+        corners = [
+            Vec3(self.map_size, 0, self.map_size),      # Northeast
+            Vec3(self.map_size, 0, -self.map_size),     # Southeast
+            Vec3(-self.map_size, 0, -self.map_size),    # Southwest
+            Vec3(-self.map_size, 0, self.map_size),     # Northwest
+        ]
+        
+        # Create corner pillars
+        pillars = []
+        for i, corner in enumerate(corners):
+            pillar = Entity(
+                model='cylinder',
+                position=corner + Vec3(0, border_height/2, 0),
+                scale=(1.5, border_height, 1.5),
+                color=border_colors[i],
+                collider='cylinder',
+                tag='border'  # Tag for identification
+            )
+            pillars.append(pillar)
+            
+            # Add a light on top of each corner
+            light = Entity(
+                parent=pillar,
+                model='sphere',
+                y=border_height/2 + 0.2,
+                scale=0.5,
+                color=color.yellow,
+                billboard=False
+            )
+            
+            # Make the light pulse
+            light.animate_color(
+                color.rgba(1.0, 0.9, 0.1, 1.0),
+                duration=1.0,
+                curve=curve.in_out_sine,
+                loop=True
+            )
+        
+        # Initialize border collection
+        self.borders = []
+        
+        # Create north border
+        north = Entity(
+            model='cube',
+            position=(0, border_height/2, self.map_size),
+            scale=(self.map_size * 2, border_height, border_thickness),
+            color=border_colors[0],
+            collider='box',
+            tag='border'  # Tag for identification
+        )
+        self.borders.append(north)
+        
+        # Add pattern to the borders
+        self.add_border_pattern(north, False)
+        
+        # Create south border
+        south = Entity(
+            model='cube',
+            position=(0, border_height/2, -self.map_size),
+            scale=(self.map_size * 2, border_height, border_thickness),
+            color=border_colors[1],
+            collider='box',
+            tag='border'  # Tag for identification
+        )
+        self.borders.append(south)
+        
+        self.add_border_pattern(south, False)
+
+        # Create east border
+        east = Entity(
+            model='cube',
+            position=(self.map_size, border_height/2, 0),
+            scale=(border_thickness, border_height, self.map_size * 2),
+            color=border_colors[2],
+            collider='box',
+            tag='border'  # Tag for identification
+        )
+        self.borders.append(east)
+        
+        self.add_border_pattern(east, True)
+
+        # Create west border
+        west = Entity(
+            model='cube',
+            position=(-self.map_size, border_height/2, 0),
+            scale=(border_thickness, border_height, self.map_size * 2),
+            color=border_colors[3],
+            collider='box',
+            tag='border'  # Tag for identification
+        )
+        self.borders.append(west)
+        
+        self.add_border_pattern(west, True)
+        
+        print(f"Created modern map border with {len(self.borders)} wall segments and {len(pillars)} corner pillars")
+    
+    def add_border_pattern(self, border, is_vertical):
+        """Add a modern pattern to the border walls without creating purple lasers"""
+        # Add subtle, non-distracting border patterns
+        num_lines = 10
+        
+        if is_vertical:
+            # Vertical border (east-west)
+            for i in range(num_lines):
+                z_pos = -25 + (i * 5)
+                line = Entity(
+                    parent=border,
+                    model='quad',
+                    color=color.rgba(0.8, 0.8, 0.9, 0.3),  # Very subtle light color
+                    double_sided=True,
+                    scale=(0.1, 0.5, 1),  # Much smaller lines
+                    y=random.uniform(-1, 1),
+                    z=z_pos - border.position.z
+                )
+        else:
+            # Horizontal border (north-south)
+            for i in range(num_lines):
+                x_pos = -25 + (i * 5)
+                line = Entity(
+                    parent=border,
+                    model='quad',
+                    color=color.rgba(0.8, 0.8, 0.9, 0.3),  # Very subtle light color
+                    double_sided=True,
+                    scale=(1, 0.5, 0.1),  # Much smaller lines
+                    y=random.uniform(-1, 1),
+                    x_pos=x_pos - border.position.x
+                )
+                
+        # No more pulsing animations that create the purple laser effect
+
+    def create_obstacle(self, obstacle_type, position):
+        """Create a modern version of obstacles"""
+        if obstacle_type == 'hydrant':
+            obstacle = Entity(
+                model='cylinder',
+                color=color.rgb(200, 0, 0),
+                position=position,
+                scale=(0.5, 1, 0.5),
+                collider='cylinder',
+                name=f'obstacle_hydrant'
+            )
+            # Add top cap
+            cap = Entity(
+                parent=obstacle,
+                model='sphere',
+                color=color.rgb(200, 0, 0),
+                position=(0, 0.6, 0),
+                scale=(0.6, 0.2, 0.6)
+            )
+            
+        elif obstacle_type == 'bench':
+            # More modern bench design
+            obstacle = Entity(
+                model='cube',
+                color=color.rgb(100, 100, 110),  # Modern gray
+                position=position,
+                scale=(2, 0.15, 0.8),
+                collider='box',
+                name=f'obstacle_bench'
+            )
+            # Add bench legs - more modern design
+            leg1 = Entity(
+                parent=obstacle,
+                model='cube',
+                color=color.rgb(80, 80, 90),  # Darker gray
+                position=(-0.7, -0.4, 0),
+                scale=(0.1, 0.7, 0.8)
+            )
+            leg2 = Entity(
+                parent=obstacle,
+                model='cube',
+                color=color.rgb(80, 80, 90),
+                position=(0.7, -0.4, 0),
+                scale=(0.1, 0.7, 0.8)
+            )
+            
+        elif obstacle_type == 'trash':
+            # Modern trash bin
+            obstacle = Entity(
+                model='cylinder',
+                color=color.rgba(0.2, 0.6, 0.3, 1.0),  # Modern green
+                position=position,
+                scale=(0.7, 1.2, 0.7),
+                collider='cylinder',
+                name=f'obstacle_trash'
+            )
+            # Add lid
+            lid = Entity(
+                parent=obstacle,
+                model='cylinder',
+                color=color.rgba(0.15, 0.5, 0.25, 1.0),  # Darker green
+                position=(0, 0.7, 0),
+                scale=(0.8, 0.1, 0.8)
+            )
+            
+            # Add recycling symbol
+            symbol = Entity(
+                parent=obstacle,
+                model='quad',
+                texture='white_cube',  # Ideally would be a recycling symbol texture
+                color=color.white,
+                scale=(0.5, 0.5, 0.5),
+                position=(0, 0.3, -0.36),
+                billboard=False
+            )
+            
+        elif obstacle_type == 'barrier':
+            # Modern safety barrier
+            obstacle = Entity(
+                model='cube',
+                color=color.rgba(0.3, 0.3, 0.9, 1.0),  # Modern blue
+                position=position,
+                scale=(2, 1, 0.3),
+                collider='box',
+                name=f'obstacle_barrier'
+            )
+            # Add modern stripes
+            for i in range(3):
+                stripe = Entity(
+                    parent=obstacle,
+                    model='quad',
+                    texture='white_cube',
+                    color=color.white,
+                    position=(0.5 - i, 0.3, 0.16),
+                    scale=(0.2, 0.6)
+                )
+                
+        else:
+            # Default modern obstacle
+            obstacle = Entity(
+                model='sphere',  # More interesting than cube
+                color=color.rgba(0.7, 0.7, 0.8, 1.0),  # Modern light gray
+                position=position,
+                scale=(1, 1, 1),
+                collider='sphere',
+                name=f'obstacle_generic'
+            )
+            
+        return obstacle
